@@ -1,0 +1,16 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
+*.xlsx
+*.txt
+!requirements.txt
+.claude/
+team.json
+
+# capture-jobcard
+capture-jobcard/.credentials.json
+capture-jobcard/.cookie
+capture-jobcard/.urls.json
+capture-jobcard/output/
