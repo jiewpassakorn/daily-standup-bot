@@ -45,7 +45,11 @@ JIRA_BASE_URL = os.getenv("JIRA_BASE_URL", "")
 JIRA_EMAIL = os.getenv("JIRA_EMAIL", "")
 JIRA_API_TOKEN = os.getenv("JIRA_API_TOKEN", "")
 JIRA_PROJECT_KEY = os.getenv("JIRA_PROJECT_KEY", "")
-WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
+WEBHOOK_URLS = [
+    u.strip() for u in os.getenv("DISCORD_WEBHOOK_URL", "").split(",") if u.strip()
+]
+BOT_USERNAME = os.getenv("BOT_USERNAME", "\u0e1a\u0e2d\u0e17\u0e1a\u0e49\u0e32\u0e1e\u0e25\u0e31\u0e07")
+BOT_AVATAR_URL = os.getenv("BOT_AVATAR_URL", "")
 TZ = ZoneInfo(os.getenv("TIMEZONE", "Asia/Bangkok"))
 try:
     STANDUP_HOUR = int(os.getenv("STANDUP_HOUR", "9"))
@@ -149,9 +153,10 @@ def validate_config():
         "JIRA_EMAIL": JIRA_EMAIL,
         "JIRA_API_TOKEN": JIRA_API_TOKEN,
         "JIRA_PROJECT_KEY": JIRA_PROJECT_KEY,
-        "DISCORD_WEBHOOK_URL": WEBHOOK_URL,
     }
     missing = [k for k, v in required.items() if not v]
+    if not WEBHOOK_URLS:
+        missing.append("DISCORD_WEBHOOK_URL")
     if missing:
         raise SystemExit(f"Missing required env vars: {', '.join(missing)}")
     if not re.match(r"^[A-Z][A-Z0-9_]{1,20}$", JIRA_PROJECT_KEY):
@@ -334,7 +339,7 @@ def build_standup_embeds(issues: list[dict]) -> list[dict]:
 
     # Footer on the last embed
     embeds[-1]["footer"] = {
-        "text": f"StandupBot  \u00b7  {JIRA_PROJECT_KEY}  \u00b7  {now.strftime('%H:%M %Z')}"
+        "text": f"{BOT_USERNAME}  \u00b7  {JIRA_PROJECT_KEY}  \u00b7  {now.strftime('%H:%M %Z')}"
     }
     embeds[-1]["timestamp"] = now.isoformat()
 
@@ -383,22 +388,30 @@ def find_latest_jobcards() -> list[Path]:
 
 
 # ── Discord Webhook ─────────────────────────────────
-def send_webhook(embeds: list[dict], files: list[Path] | None = None):
-    """Send embeds to Discord via webhook, optionally with file attachments."""
+def _webhook_payload(embeds: list[dict]) -> dict:
+    """Build the webhook JSON payload with bot identity."""
+    data: dict = {"embeds": embeds, "username": BOT_USERNAME}
+    if BOT_AVATAR_URL:
+        data["avatar_url"] = BOT_AVATAR_URL
+    return data
+
+
+def _send_to_url(url: str, embeds: list[dict], files: list[Path] | None = None):
+    """Send embeds to a single Discord webhook URL."""
     if not files:
-        payload = json.dumps({"embeds": embeds}).encode()
+        payload = json.dumps(_webhook_payload(embeds)).encode()
         headers = {
             "Content-Type": "application/json",
             "User-Agent": "StandupBot/1.0",
         }
         try:
-            req = urllib.request.Request(WEBHOOK_URL, data=payload, headers=headers)
+            req = urllib.request.Request(url, data=payload, headers=headers)
             with urllib.request.urlopen(req, timeout=15) as resp:
-                log.info("Webhook sent (status %s)", resp.status)
+                log.info("Webhook sent to %s (status %s)", url[:60], resp.status)
         except urllib.error.HTTPError as e:
-            log.error("Webhook error %s: %s", e.code, e.read().decode()[:200])
+            log.error("Webhook error %s → %s: %s", url[:60], e.code, e.read().decode()[:200])
         except (urllib.error.URLError, OSError) as e:
-            log.error("Webhook connection error: %s", e)
+            log.error("Webhook connection error %s: %s", url[:60], e)
         return
 
     # Multipart form-data for file attachments
@@ -409,7 +422,7 @@ def send_webhook(embeds: list[dict], files: list[Path] | None = None):
     body += f"--{boundary}\r\n".encode()
     body += b'Content-Disposition: form-data; name="payload_json"\r\n'
     body += b"Content-Type: application/json\r\n\r\n"
-    body += json.dumps({"embeds": embeds}).encode()
+    body += json.dumps(_webhook_payload(embeds)).encode()
     body += b"\r\n"
 
     # file parts
@@ -428,13 +441,19 @@ def send_webhook(embeds: list[dict], files: list[Path] | None = None):
     }
 
     try:
-        req = urllib.request.Request(WEBHOOK_URL, data=body, headers=headers)
+        req = urllib.request.Request(url, data=body, headers=headers)
         with urllib.request.urlopen(req, timeout=30) as resp:
-            log.info("Webhook sent with %d file(s) (status %s)", len(files), resp.status)
+            log.info("Webhook sent with %d file(s) to %s (status %s)", len(files), url[:60], resp.status)
     except urllib.error.HTTPError as e:
-        log.error("Webhook error %s: %s", e.code, e.read().decode()[:200])
+        log.error("Webhook error %s → %s: %s", url[:60], e.code, e.read().decode()[:200])
     except (urllib.error.URLError, OSError) as e:
-        log.error("Webhook connection error: %s", e)
+        log.error("Webhook connection error %s: %s", url[:60], e)
+
+
+def send_webhook(embeds: list[dict], files: list[Path] | None = None):
+    """Send embeds to all configured Discord webhook URLs."""
+    for url in WEBHOOK_URLS:
+        _send_to_url(url, embeds, files)
 
 
 # ── Post standup ────────────────────────────────────
