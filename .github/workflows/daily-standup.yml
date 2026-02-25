@@ -39,6 +39,8 @@ jobs:
           JIRA_API_TOKEN=${{ secrets.JIRA_API_TOKEN }}
           JIRA_PROJECT_KEY=${{ secrets.JIRA_PROJECT_KEY }}
           DISCORD_WEBHOOK_URL=${{ secrets.DISCORD_WEBHOOK_URL }}
+          BOT_USERNAME=${{ secrets.BOT_USERNAME }}
+          BOT_AVATAR_URL=${{ secrets.BOT_AVATAR_URL }}
           STANDUP_HOUR=9
           STANDUP_MINUTE=0
           TIMEZONE=Asia/Bangkok
