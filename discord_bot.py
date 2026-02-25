@@ -64,6 +64,12 @@ STATUS_EMOJI = {
     "Closed": "\U0001f7e2",
     "Resolved": "\U0001f535",
 }
+STATUS_COLOR = {
+    "In Progress": 0xEAB308,
+    "Open": 0x6B7280,
+    "On Hold": 0xEF4444,
+}
+SUMMARY_COLOR = 0x5865F2
 
 logging.basicConfig(
     level=logging.INFO,
@@ -161,9 +167,42 @@ def fetch_jira_issues() -> list[dict] | None:
     return all_issues
 
 
+# ── Helpers ─────────────────────────────────────────
+def _truncate(text: str, max_len: int = 80) -> str:
+    """Truncate text to *max_len* characters, adding '...' if trimmed."""
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 1].rstrip() + "\u2026"
+
+
+def _fmt_due(due_str: str | None) -> str:
+    """Format a due date string compactly (e.g. '28 Feb')."""
+    if not due_str:
+        return ""
+    try:
+        return datetime.strptime(due_str, "%Y-%m-%d").strftime("%d %b")
+    except ValueError:
+        return due_str
+
+
+def _embed_chars(embed: dict) -> int:
+    """Count characters that Discord counts toward the 6 000-char limit."""
+    n = 0
+    for key in ("title", "description"):
+        n += len(embed.get(key, ""))
+    if "author" in embed:
+        n += len(embed["author"].get("name", ""))
+    if "footer" in embed:
+        n += len(embed["footer"].get("text", ""))
+    for field in embed.get("fields", []):
+        n += len(field.get("name", ""))
+        n += len(field.get("value", ""))
+    return n
+
+
 # ── Embed builder ───────────────────────────────────
-def build_standup_embed(issues: list[dict]) -> dict:
-    """Build a Discord webhook embed payload from Jira issues."""
+def build_standup_embeds(issues: list[dict]) -> list[dict]:
+    """Build modern multi-embed Discord payload from Jira issues."""
     now = datetime.now(TZ)
 
     # Count by status
@@ -172,54 +211,85 @@ def build_standup_embed(issues: list[dict]) -> dict:
         s = issue["status"]
         status_counts[s] = status_counts.get(s, 0) + 1
 
-    # Summary line
     total = len(issues)
-    summary_parts = [f"**Total: {total}**"]
+    active_count = sum(1 for i in issues if i["status"] in ACTIVE_STATUSES)
+
+    # ── Summary embed ──────────────────────────────
+    fields = []
     for status in ["In Progress", "Open", "On Hold", "Resolved", "Closed"]:
         count = status_counts.get(status, 0)
-        emoji = STATUS_EMOJI.get(status, "")
-        summary_parts.append(f"{emoji} {status}: {count}")
-    summary_line = " | ".join(summary_parts)
-
-    # Active tasks grouped by status
-    sections = []
-    for status in ACTIVE_STATUSES:
-        active = [i for i in issues if i["status"] == status]
-        if not active:
+        if count == 0:
             continue
         emoji = STATUS_EMOJI.get(status, "")
-        lines = [f"\n**{emoji} {status} ({len(active)})**"]
-        for issue in active:
-            due = issue["due_date"] or "--"
-            lines.append(
-                f"> [{issue['key']}]({issue['url']}) — {issue['summary']}\n"
-                f"> Assignee: **{issue['assignee']}** | Due: {due}"
-            )
-        sections.append("\n".join(lines))
+        fields.append({"name": f"{emoji} {status}", "value": f"**{count}**", "inline": True})
 
-    description = summary_line + "\n" + "\n".join(sections)
-
-    # Truncate if needed (Discord limit: 4096)
-    if len(description) > 4000:
-        description = description[:3950] + "\n\n*...truncated. See Jira for full list.*"
-
-    embed = {
-        "title": f"Daily Stand-up — {JIRA_PROJECT_KEY}",
-        "description": description,
-        "color": 0x2F5496,
-        "timestamp": now.isoformat(),
-        "footer": {
-            "text": f"{JIRA_PROJECT_KEY} | {total} issues | {now.strftime('%A, %d %b %Y')}"
-        },
+    summary_embed = {
+        "author": {"name": "\U0001f4ca Daily Stand-up Report"},
+        "title": f"{JIRA_PROJECT_KEY} \u2014 {now.strftime('%A, %d %b %Y')}",
+        "description": f"> Tracking **{total}** issues \u00b7 **{active_count}** active",
+        "fields": fields,
+        "color": SUMMARY_COLOR,
     }
-    return embed
+
+    embeds: list[dict] = [summary_embed]
+
+    # ── Status-group embeds ────────────────────────
+    for status in ACTIVE_STATUSES:
+        group = [i for i in issues if i["status"] == status]
+        if not group:
+            continue
+
+        emoji = STATUS_EMOJI.get(status, "")
+        lines = []
+        for issue in group:
+            due = _fmt_due(issue["due_date"])
+            meta_parts = [issue["assignee"]]
+            if due:
+                meta_parts.append(due)
+            lines.append(
+                f"**[{issue['key']}]({issue['url']})** \u2014 {_truncate(issue['summary'])}\n"
+                f"*{' \u00b7 '.join(meta_parts)}*"
+            )
+
+        desc = "\n\n".join(lines)
+        if len(desc) > 4000:
+            desc = desc[:3950] + "\n\n*\u2026truncated \u2014 see Jira for full list*"
+
+        embeds.append(
+            {
+                "title": f"{emoji} {status} \u2014 {len(group)} issue{'s' if len(group) != 1 else ''}",
+                "description": desc,
+                "color": STATUS_COLOR.get(status, SUMMARY_COLOR),
+            }
+        )
+
+    # Footer on the last embed
+    embeds[-1]["footer"] = {
+        "text": f"StandupBot  \u00b7  {JIRA_PROJECT_KEY}  \u00b7  {now.strftime('%H:%M %Z')}"
+    }
+    embeds[-1]["timestamp"] = now.isoformat()
+
+    # ── Guard Discord's 6 000-char limit ───────────
+    total_chars = sum(_embed_chars(e) for e in embeds)
+    while total_chars > 5900 and len(embeds) > 1:
+        last_group = embeds[-1]
+        desc = last_group.get("description", "")
+        excess = total_chars - 5900
+        if len(desc) > excess + 60:
+            last_group["description"] = desc[: len(desc) - excess - 50] + "\n\n*\u2026truncated*"
+        else:
+            last_group["description"] = "*Too many issues to display \u2014 see Jira board.*"
+        total_chars = sum(_embed_chars(e) for e in embeds)
+
+    return embeds
 
 
 def build_error_embed(msg: str) -> dict:
     return {
-        "title": "Stand-up Report — Error",
-        "description": f"Could not fetch data from Jira.\n\n```{msg}```",
-        "color": 0xFF5050,
+        "author": {"name": "\u26a0\ufe0f Stand-up Report"},
+        "title": "Error \u2014 Could not fetch data",
+        "description": f"```\n{msg}\n```",
+        "color": 0xEF4444,
     }
 
 
@@ -244,10 +314,10 @@ def find_latest_jobcards() -> list[Path]:
 
 
 # ── Discord Webhook ─────────────────────────────────
-def send_webhook(embed: dict, files: list[Path] | None = None):
-    """Send an embed to Discord via webhook, optionally with file attachments."""
+def send_webhook(embeds: list[dict], files: list[Path] | None = None):
+    """Send embeds to Discord via webhook, optionally with file attachments."""
     if not files:
-        payload = json.dumps({"embeds": [embed]}).encode()
+        payload = json.dumps({"embeds": embeds}).encode()
         headers = {
             "Content-Type": "application/json",
             "User-Agent": "StandupBot/1.0",
@@ -270,7 +340,7 @@ def send_webhook(embed: dict, files: list[Path] | None = None):
     body += f"--{boundary}\r\n".encode()
     body += b'Content-Disposition: form-data; name="payload_json"\r\n'
     body += b"Content-Type: application/json\r\n\r\n"
-    body += json.dumps({"embeds": [embed]}).encode()
+    body += json.dumps({"embeds": embeds}).encode()
     body += b"\r\n"
 
     # file parts
@@ -303,12 +373,12 @@ def post_standup():
     """Fetch Jira data and post to Discord with job card attachments."""
     issues = fetch_jira_issues()
     if issues is None:
-        send_webhook(build_error_embed("Jira API request failed"))
+        send_webhook([build_error_embed("Jira API request failed")])
         return
 
-    embed = build_standup_embed(issues)
+    embeds = build_standup_embeds(issues)
     jobcards = find_latest_jobcards()
-    send_webhook(embed, files=jobcards or None)
+    send_webhook(embeds, files=jobcards or None)
     log.info("Stand-up posted successfully")
 
 
