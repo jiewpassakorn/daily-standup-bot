@@ -35,14 +35,16 @@ def build_export_url(
     portrait: bool = False,
     scale: int = 4,
     paper_size: int = 6,
+    print_range: str | None = None,
 ) -> str:
     """Build the Google Sheets PDF export URL with zero margins.
 
     Scale: 1=Normal 100%, 2=Fit to width, 3=Fit to height, 4=Fit to page
     Paper: 0=Letter, 1=Tabloid, 2=Legal, 6=A3, 7=A4
+    print_range: e.g. "A1:R100" to limit exported area
     """
     base = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export"
-    params = urlencode({
+    params_dict = {
         "format": "pdf",
         "gid": gid,
         "size": paper_size,
@@ -59,7 +61,10 @@ def build_export_url(
         "bottom_margin": "0",
         "left_margin": "0",
         "right_margin": "0",
-    })
+    }
+    if print_range:
+        params_dict["range"] = print_range
+    params = urlencode(params_dict)
     return f"{base}?{params}"
 
 

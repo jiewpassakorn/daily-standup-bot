@@ -382,9 +382,58 @@ def find_latest_jobcards() -> list[Path]:
         return []
 
     latest = timestamps[0]
-    files = sorted(latest.glob("*/*_merged.jpg"))
+    files = sorted(latest.glob("*/*.jpg"))
     log.info("Found %d job card(s) in %s", len(files), latest.name)
     return files
+
+
+# ── Image compression ──────────────────────────────
+def compress_jobcards(files: list[Path], quality: int = 65, max_width: int = 1600) -> list[Path]:
+    """Compress job card images to reduce Discord upload size. Returns paths to compressed files."""
+    try:
+        from PIL import Image
+    except ImportError:
+        log.warning("Pillow not installed, skipping compression")
+        return files
+
+    # Save compressed files next to the originals
+    out_dir = files[0].parents[1] / "compressed"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    compressed = []
+
+    for f in files:
+        try:
+            img = Image.open(f)
+            if img.mode in ("RGBA", "P"):
+                img = img.convert("RGB")
+
+            w, h = img.size
+            if w > max_width:
+                ratio = max_width / w
+                img = img.resize((max_width, int(h * ratio)), Image.LANCZOS)
+
+            out_path = out_dir / f"{f.stem}.jpg"
+            img.save(out_path, "JPEG", quality=quality, optimize=True)
+
+            before = f.stat().st_size
+            after = out_path.stat().st_size
+            log.info("Compressed %s: %s → %s (%.0f%% smaller)", f.name,
+                     _get_size_str(before), _get_size_str(after), (1 - after / before) * 100)
+            compressed.append(out_path)
+        except Exception as e:
+            log.warning("Failed to compress %s: %s, using original", f.name, e)
+            compressed.append(f)
+
+    return compressed
+
+
+def _get_size_str(size_bytes: int) -> str:
+    """Format file size as human-readable string."""
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    return f"{size_bytes / 1024 / 1024:.1f} MB"
 
 
 # ── Discord Webhook ─────────────────────────────────
@@ -466,6 +515,8 @@ def post_standup():
 
     embeds = build_standup_embeds(issues)
     jobcards = find_latest_jobcards()
+    if jobcards:
+        jobcards = compress_jobcards(jobcards, quality=60, max_width=1400)
     send_webhook(embeds, files=jobcards or None)
     log.info("Stand-up posted successfully")
 

@@ -40,6 +40,16 @@ def _resize(img: Image.Image, max_width: int | None) -> Image.Image:
     return img
 
 
+def _remove_images(doc: pymupdf.Document) -> None:
+    """Remove all images from every page in the PDF."""
+    for page in doc:
+        images = page.get_images(full=True)
+        for img_info in images:
+            xref = img_info[0]
+            page.delete_image(xref)
+        page.apply_redactions()
+
+
 def process_pdf(
     pdf_path: Path,
     output_dir: Path,
@@ -48,9 +58,12 @@ def process_pdf(
     merge: bool = True,
     prefix: str = "page",
     max_width: int | None = 1600,
+    remove_images: bool = False,
 ) -> tuple[int, list[Path]]:
     """Convert PDF to trimmed images. Returns (page_count, saved_paths)."""
     doc = pymupdf.open(str(pdf_path))
+    if remove_images:
+        _remove_images(doc)
     zoom = dpi / 72
     mat = pymupdf.Matrix(zoom, zoom)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -79,7 +92,9 @@ def process_pdf(
     if merge and len(saved) > 1:
         merged_path = output_dir / f"{prefix}_merged.{fmt}"
         _merge_from_files(saved, merged_path, save_kwargs, max_width)
-        saved.append(merged_path)
+        for p in saved:
+            p.unlink()
+        saved = [merged_path]
 
     return page_count, saved
 

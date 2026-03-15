@@ -1,6 +1,6 @@
 PYTHON = .venv/bin/python
 
-.PHONY: setup all setup-sa test-auth list clean help
+.PHONY: setup all jobcard setup-sa test-auth list clean help
 
 ## Setup
 setup: .venv ## Create venv + install dependencies
@@ -13,6 +13,15 @@ setup: .venv ## Create venv + install dependencies
 all: ## Capture all saved URLs (email-optimised)
 	@TS=$$(date +%Y%m%d_%H%M%S); \
 	for name in $$($(PYTHON) -c "import json; print(' '.join(json.load(open('.urls.json')).keys()))"); do \
+		echo "=== Capturing $$name ==="; \
+		$(PYTHON) main.py --name $$name --timestamp $$TS || echo "  FAILED: $$name (skipping)"; \
+	done
+
+EXCLUDE = testing-hangseng
+
+jobcard: ## Capture project job cards only (exclude testing sheets)
+	@TS=$$(date +%Y%m%d_%H%M%S); \
+	for name in $$($(PYTHON) -c "import json; exclude='$(EXCLUDE)'.split(); print(' '.join(k for k in json.load(open('.urls.json')) if k not in exclude))"); do \
 		echo "=== Capturing $$name ==="; \
 		$(PYTHON) main.py --name $$name --timestamp $$TS || echo "  FAILED: $$name (skipping)"; \
 	done
