@@ -382,8 +382,16 @@ def find_latest_jobcards() -> list[Path]:
         return []
 
     latest = timestamps[0]
-    files = sorted(latest.glob("*/*.jpg"))
-    log.info("Found %d job card(s) in %s", len(files), latest.name)
+    # Use compressed files if available, otherwise originals
+    compressed_dir = latest / "compressed"
+    if compressed_dir.is_dir() and list(compressed_dir.glob("*.jpg")):
+        files = sorted(compressed_dir.glob("*.jpg"))
+        log.info("Found %d compressed job card(s) in %s", len(files), latest.name)
+    else:
+        files = sorted(
+            f for f in latest.glob("*/*.jpg") if f.parent.name != "compressed"
+        )
+        log.info("Found %d job card(s) in %s", len(files), latest.name)
     return files
 
 
@@ -515,7 +523,7 @@ def post_standup():
 
     embeds = build_standup_embeds(issues)
     jobcards = find_latest_jobcards()
-    if jobcards:
+    if jobcards and jobcards[0].parent.name != "compressed":
         jobcards = compress_jobcards(jobcards, quality=60, max_width=1400)
     send_webhook(embeds, files=jobcards or None)
     log.info("Stand-up posted successfully")

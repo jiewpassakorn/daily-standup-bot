@@ -8,7 +8,7 @@ capture: ## Capture ALL projects (includes testing-hangseng), no Discord
 capture-jobcard: ## Capture job cards only (exclude testing-hangseng), no Discord
 	$(MAKE) -C capture-jobcard jobcard
 
-jobcard: capture-jobcard webhook ## Capture job cards only (exclude testing-hangseng) + send Discord
+jobcard: capture-jobcard compress webhook ## Capture job cards + compress + send Discord
 
 compress: ## Compress latest job card images (no Discord)
 	python3 -c "from discord_bot import find_latest_jobcards, compress_jobcards; files = find_latest_jobcards(); files and compress_jobcards(files, quality=60, max_width=1400)"

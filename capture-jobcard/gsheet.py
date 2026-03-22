@@ -1,11 +1,16 @@
 import json
 import re
+import signal
 from pathlib import Path
 from urllib.parse import urlencode
 
 import requests
 from google.auth.transport.requests import AuthorizedSession
 from google.oauth2 import service_account
+
+
+class DownloadTimeout(Exception):
+    pass
 
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
@@ -85,11 +90,30 @@ def create_session(credentials_file: str | None = None) -> requests.Session:
     return requests.Session()
 
 
-def download_pdf(export_url: str, output_path: Path, session: requests.Session | None = None) -> None:
-    """Download the PDF from Google Sheets export URL."""
+def download_pdf(
+    export_url: str,
+    output_path: Path,
+    session: requests.Session | None = None,
+    total_timeout: int = 120,
+) -> None:
+    """Download the PDF from Google Sheets export URL.
+
+    Uses SIGALRM for a hard total timeout to handle cases where
+    Google slowly trickles data and per-socket timeouts never fire.
+    """
     s = session or requests.Session()
-    response = s.get(export_url, timeout=(30, 60))
-    response.raise_for_status()
+
+    def _timeout_handler(signum, frame):
+        raise DownloadTimeout(f"Download exceeded {total_timeout}s total timeout")
+
+    old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+    signal.alarm(total_timeout)
+    try:
+        response = s.get(export_url, timeout=(30, 60))
+        response.raise_for_status()
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
 
     content_type = response.headers.get("Content-Type", "")
     if "text/html" in content_type:

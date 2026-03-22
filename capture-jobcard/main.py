@@ -12,7 +12,7 @@ from rich import print as rprint
 from rich.table import Table
 
 from converter import process_pdf
-from gsheet import build_export_url, create_session, download_pdf, parse_url
+from gsheet import DownloadTimeout, build_export_url, create_session, download_pdf, parse_url
 
 URLS_FILE = Path(".urls.json")
 
@@ -73,6 +73,11 @@ def capture(
             download_pdf(export_url, pdf_path, session=session)
             rprint(f"  Saved: {pdf_path} ({attempt['label']})")
             break
+        except DownloadTimeout:
+            if i < len(export_attempts) - 1:
+                rprint(f"  [yellow]{attempt['label']} timed out, trying next...[/yellow]")
+            else:
+                raise
         except HTTPError as e:
             if e.response is not None and e.response.status_code == 429:
                 for retry in range(3):
